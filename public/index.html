@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>Person Direction Assistant</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <main class="wrap" role="main">
+      <header class="header" role="banner">
+        <div class="appTitle">Person Direction Assistant</div>
+        <div class="appSub">Prototype for visually impaired users — tap once to hear where people are.</div>
+      </header>
+
+      <section class="card" aria-label="Camera">
+        <div class="cameraFrame" aria-hidden="true">
+          <video id="video" autoplay playsinline muted></video>
+          <canvas id="canvas" class="hidden"></canvas>
+        </div>
+
+        <!-- Big single action -->
+        <button id="btnCapture" class="bigButton" aria-label="Take photo and describe people">
+          Take photo
+        </button>
+
+        <!-- Screen-reader friendly status -->
+        <div id="status" class="status" aria-live="assertive">
+          Ready. Tap “Take photo”.
+        </div>
+
+        <div class="smallNote" aria-hidden="true">
+          Tip: For best results, aim the camera straight ahead in good lighting.
+        </div>
+      </section>
+    </main>
+
+    <script src="app.js"></script>
+  </body>
+</html>
