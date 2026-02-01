@@ -1,3 +1,5 @@
+// public/app.js
+
 const video = document.getElementById("video");
 const canvas = document.getElementById("canvas");
 const btnCapture = document.getElementById("btnCapture");
@@ -15,14 +17,18 @@ const AUTO_INTERVAL_MS = 2500;
 let clickTimer = null;
 const DOUBLE_CLICK_WINDOW_MS = 260;
 
-// Detection tuning
-const PERSON_LABELS = new Set(["person", "people", "human"]);
-const CONFIDENCE_THRESHOLD = 0.35;
-const HIGH_CONF = 0.70;
-const MED_CONF = 0.45;
+// Long press handling
+const LONG_PRESS_MS = 650;
+let longPressTimer = null;
+let longPressTriggered = false;
 
-// Auto-repeat: speak when bucketed count changes (0 / 1 / 2 / 3+)
+// Auto-repeat: last state key
 let lastAutoKey = null;
+
+// One-time spoken intro (must happen after user gesture)
+let introSpoken = false;
+
+let introJustPlayed = false;
 
 // ---------- UI ----------
 function setStatus(text) {
@@ -51,11 +57,8 @@ function speakOnce(text) {
       u.rate = 1.0;
       u.pitch = 1.0;
       u.volume = 1.0;
-
       u.onend = () => resolve();
       u.onerror = () => resolve();
-
-      // Do NOT cancel; let it finish
       window.speechSynthesis.speak(u);
     } catch {
       resolve();
@@ -63,13 +66,31 @@ function speakOnce(text) {
   });
 }
 
+async function speakIntroOnce() {
+  if (introSpoken) return false;
+
+  introSpoken = true;
+  introJustPlayed = true;
+
+  await speakQueued(
+    "Single tap to detect people. Double tap to auto repeat. Press and hold for a more detailed analysis of the person."
+  );
+
+  return true;
+}
+
+
 // ---------- Camera ----------
 async function ensureCamera() {
   if (stream) return;
 
   setStatus("Requesting camera permission…");
   stream = await navigator.mediaDevices.getUserMedia({
-    video: { facingMode: "environment" },
+    video: {
+      facingMode: "environment",
+      width: { ideal: 640 },
+      height: { ideal: 480 },
+    },
     audio: false,
   });
 
@@ -79,7 +100,9 @@ async function ensureCamera() {
     video.onloadedmetadata = () => resolve();
   });
 
-  setStatus('Ready. Single tap: take photo. Double tap: auto-repeat.');
+  setStatus(
+    "Ready. Single tap: detect. Double tap: auto-repeat. Press and hold: detailed."
+  );
 }
 
 function captureFrameBlob() {
@@ -87,64 +110,81 @@ function captureFrameBlob() {
   const h = video.videoHeight;
   if (!w || !h) throw new Error("Camera not ready yet.");
 
-  canvas.width = w;
-  canvas.height = h;
+  const MAX_W = 640;
+  const scale = Math.min(1, MAX_W / w);
 
-  const ctx = canvas.getContext("2d");
-  ctx.drawImage(video, 0, 0, w, h);
+  canvas.width = Math.round(w * scale);
+  canvas.height = Math.round(h * scale);
+
+  const ctx = canvas.getContext("2d", { alpha: false });
+  ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
 
   return new Promise((resolve, reject) => {
     canvas.toBlob(
       (blob) => (blob ? resolve(blob) : reject(new Error("Failed to capture photo."))),
       "image/jpeg",
-      0.92
+      0.82
     );
   });
 }
 
-// ---------- EyePop inference (via your server) ----------
-async function inferWithEyePop(imageBlob) {
+// ---------- Server inference ----------
+async function inferWithEyePop(imageBlob, mode) {
   const form = new FormData();
   form.append("file", imageBlob, "photo.jpg");
 
-  const resp = await fetch("/api/infer", { method: "POST", body: form });
-  const payload = await resp.json();
+  const resp = await fetch(`/api/infer?mode=${encodeURIComponent(mode)}`, {
+    method: "POST",
+    body: form,
+  });
 
+  const payload = await resp.json();
   if (!resp.ok) throw new Error(payload?.error || "Inference failed");
   return payload;
 }
 
-function normalizeObjects(payload) {
-  if (payload && payload.best && Array.isArray(payload.best.objects)) return payload.best.objects;
-  if (Array.isArray(payload) && payload[0]?.objects) return payload[0].objects;
-  if (payload && Array.isArray(payload.objects)) return payload.objects;
-  return [];
+// ---------- Parsing ----------
+function analyzePeopleFromServer(payload) {
+  const people = Array.isArray(payload?.people) ? payload.people : [];
+  const count = people.length;
+  const best = people[0] || null;
+  return { count, best, people };
 }
 
-function analyzePeople(objects) {
-  let count = 0;
-  let bestConf = 0;
-
-  for (const o of objects) {
-    const label = String(o.classLabel || "").toLowerCase();
-    const conf = Number(o.confidence || 0);
-
-    if (PERSON_LABELS.has(label) && conf >= CONFIDENCE_THRESHOLD) {
-      count += 1;
-      if (conf > bestConf) bestConf = conf;
-    }
-  }
-
-  return { count, bestConf };
+function nicePosition(best) {
+  const p = String(best?.position || "").toLowerCase();
+  if (p === "left" || p === "right" || p === "center") return p;
+  return "center";
 }
 
-function confidenceWord(bestConf) {
-  if (bestConf >= HIGH_CONF) return "I see";
-  if (bestConf >= MED_CONF) return "I likely see";
-  return "I might see";
+function niceGender(best) {
+  if (!best?.gender) return null;
+  const g = String(best.gender).toLowerCase().trim();
+  if (g === "male") return "male";
+  if (g === "female") return "female";
+  return null;
 }
 
-function messageFor(count, bestConf) {
+function niceActivity(best) {
+  if (!best?.activity) return null;
+  const a = String(best.activity).toLowerCase().trim();
+  const known = [
+    "walking",
+    "running",
+    "sitting",
+    "standing",
+    "exercising",
+    "eating",
+    "talking",
+    "working",
+    "playing",
+    "other",
+  ];
+  return known.find((k) => a === k || a.includes(k)) || null;
+}
+
+// ---------- Messages ----------
+function messageDetect(count, best) {
   if (count === 0) {
     return {
       text: "No people detected where your camera is pointed. If you're unsure, take another photo.",
@@ -152,32 +192,66 @@ function messageFor(count, bestConf) {
     };
   }
 
-  const cw = confidenceWord(bestConf);
+  const pos = nicePosition(best);
 
   if (count === 1) {
     return {
-      text: `Be careful. ${cw} one person ahead where your camera is pointed.`,
+      text: `Be careful. One person on the ${pos}.`,
       vib: [25, 40, 25],
     };
   }
 
   const plural = count === 2 ? "two people" : `${count} people`;
   return {
-    text: `Be careful. ${cw} ${plural} ahead.`,
+    text: `Be careful. I see ${plural} ahead. Closest person on the ${pos}.`,
     vib: [30, 80, 30],
   };
 }
 
-// Bucket counts so the app speaks on meaningful changes
-function autoKeyForCount(count) {
+function messageDetailed(count, best) {
+  if (count === 0) {
+    return {
+      text: "Detailed: no people detected in this photo.",
+      vib: [40, 60, 40],
+    };
+  }
+
+  const pos = nicePosition(best);
+  const gender = niceGender(best);
+  const activity = niceActivity(best);
+
+  const parts = [];
+
+  if (count === 1) parts.push("Detailed: I see one person.");
+  else if (count === 2) parts.push("Detailed: I see two people.");
+  else parts.push(`Detailed: I see ${count} people.`);
+
+  if (activity) parts.push(`They seem to be ${activity}.`);
+  if (gender) parts.push(`They seem to be ${gender}.`);
+  if (!activity && !gender) parts.push("I'm not sure about their activity or gender.");
+
+  parts.push(`Closest person is on the ${pos}.`);
+
+  return { text: parts.join(" "), vib: [25, 40, 25] };
+}
+
+// Auto-repeat bucket for count + best position
+function autoBucketForCount(count) {
   if (count <= 0) return "c0";
   if (count === 1) return "c1";
   if (count === 2) return "c2";
   return "c3plus";
 }
 
-// ---------- Core action ----------
-async function takeAndAnnounce({ auto = false } = {}) {
+function autoKey(count, best) {
+  const bucket = autoBucketForCount(count);
+  if (bucket === "c0") return bucket;
+  const pos = nicePosition(best);
+  return `${bucket}|${pos}`;
+}
+
+// ---------- Core actions ----------
+async function doDetect({ auto = false } = {}) {
   if (busy) return;
   busy = true;
 
@@ -188,24 +262,20 @@ async function takeAndAnnounce({ auto = false } = {}) {
     vibrate(18);
 
     const blob = await captureFrameBlob();
-
     setStatus(auto ? "Auto-repeat: analyzing…" : "Analyzing…");
-    const payload = await inferWithEyePop(blob);
-    const objects = normalizeObjects(payload);
 
-    const { count, bestConf } = analyzePeople(objects);
-    const msg = messageFor(count, bestConf);
+    const payload = await inferWithEyePop(blob, "detect");
+    const { count, best } = analyzePeopleFromServer(payload);
+    const msg = messageDetect(count, best);
 
     if (!auto) {
-      // Single-shot: always speak
       await speakQueued(msg.text);
       vibrate(msg.vib);
       setStatus(`Done. ${count === 0 ? "No people detected." : `${count} people detected.`}`);
       return;
     }
 
-    // Auto-repeat: speak only when bucket changes
-    const key = autoKeyForCount(count);
+    const key = autoKey(count, best);
     const changed = lastAutoKey === null || key !== lastAutoKey;
     lastAutoKey = key;
 
@@ -218,7 +288,6 @@ async function takeAndAnnounce({ auto = false } = {}) {
   } catch (err) {
     setStatus(`Error. ${err.message}`);
 
-    // In auto mode, only speak the first time we hit an "error bucket"
     if (!auto) {
       await speakQueued("Error. Please try again.");
       vibrate([60, 40, 60]);
@@ -236,25 +305,57 @@ async function takeAndAnnounce({ auto = false } = {}) {
   }
 }
 
+async function doDetailedVI() {
+  if (busy) return;
+  busy = true;
+
+  try {
+    await ensureCamera();
+
+    setStatus("Capturing for detailed analysis…");
+    vibrate([15, 25, 15]);
+
+    await speakQueued("Detailed analysis. This can take a while. Please hold still.");
+
+    const blob = await captureFrameBlob();
+    setStatus("Detailed analysis in progress…");
+
+    const payload = await inferWithEyePop(blob, "vi");
+    const { count, best } = analyzePeopleFromServer(payload);
+
+    const msg = messageDetailed(count, best);
+    await speakQueued(msg.text);
+    vibrate(msg.vib);
+    setStatus("Detailed analysis done.");
+  } catch (err) {
+    setStatus(`Error. ${err.message}`);
+    await speakQueued("Error during detailed analysis. Please try again.");
+    vibrate([60, 40, 60]);
+  } finally {
+    busy = false;
+  }
+}
+
 // ---------- Auto-repeat toggle ----------
 async function enterAutoRepeat() {
   if (autoRepeatOn) return;
   autoRepeatOn = true;
-  lastAutoKey = null; // reset so first result speaks
+  lastAutoKey = null;
 
   await ensureCamera();
 
   setStatus("Auto-repeat mode on.");
-  await speakQueued("Auto-repeat mode on. I will speak only when the number of people changes. Double tap to exit.");
+  await speakQueued(
+    "Auto-repeat mode on. I will speak when the count or position changes. Double tap to exit."
+  );
   vibrate([25, 40, 25]);
 
   autoTimer = setInterval(() => {
     if (!autoRepeatOn) return;
-    takeAndAnnounce({ auto: true });
+    doDetect({ auto: true });
   }, AUTO_INTERVAL_MS);
 
-  // Run immediately
-  takeAndAnnounce({ auto: true });
+  doDetect({ auto: true });
 }
 
 async function exitAutoRepeat() {
@@ -263,7 +364,7 @@ async function exitAutoRepeat() {
   if (autoTimer) clearInterval(autoTimer);
   autoTimer = null;
 
-  setStatus('Auto-repeat mode off.');
+  setStatus("Auto-repeat mode off.");
   await speakQueued("Auto-repeat mode off.");
   vibrate([40, 30, 40]);
 }
@@ -273,23 +374,63 @@ async function toggleAutoRepeat() {
   else await enterAutoRepeat();
 }
 
-// ---------- One button: single vs double click ----------
+// ---------- Long press wiring ----------
+function startLongPress() {
+  if (longPressTimer) clearTimeout(longPressTimer);
+  longPressTriggered = false;
+
+  longPressTimer = setTimeout(() => {
+    longPressTriggered = true;
+    doDetailedVI();
+  }, LONG_PRESS_MS);
+}
+
+function cancelLongPress() {
+  if (longPressTimer) clearTimeout(longPressTimer);
+  longPressTimer = null;
+}
+
+// Speak intro on first gesture (pointerdown is best for mobile)
+btnCapture.addEventListener("pointerdown", (e) => {
+  e.preventDefault();
+  speakIntroOnce();
+  startLongPress();
+});
+
+btnCapture.addEventListener("pointerup", cancelLongPress);
+btnCapture.addEventListener("pointercancel", cancelLongPress);
+btnCapture.addEventListener("pointerleave", cancelLongPress);
+
+// ---------- Single vs double click ----------
 btnCapture.addEventListener("click", () => {
+  if (longPressTriggered) {
+    longPressTriggered = false;
+    return;
+  }
+
+  // ⛔ First tap: intro only, no detection
+  if (introJustPlayed) {
+    introJustPlayed = false;
+    return;
+  }
+
   if (clickTimer) clearTimeout(clickTimer);
   clickTimer = setTimeout(() => {
     clickTimer = null;
 
     if (!autoRepeatOn) {
-      takeAndAnnounce({ auto: false });
+      doDetect({ auto: false });
     } else {
-      // Keep it simple in auto mode
       speakQueued("Auto-repeat is on. Double tap to exit.");
     }
   }, DOUBLE_CLICK_WINDOW_MS);
 });
 
+
 btnCapture.addEventListener("dblclick", (e) => {
   e.preventDefault();
+  if (!introSpoken) return;
+
   if (clickTimer) {
     clearTimeout(clickTimer);
     clickTimer = null;
@@ -297,5 +438,6 @@ btnCapture.addEventListener("dblclick", (e) => {
   toggleAutoRepeat();
 });
 
-// Initial UX
-setStatus('Ready. Single tap: take photo. Double tap: auto-repeat.');
+
+// Initial UX (visual)
+setStatus("Tap the big button to begin.");

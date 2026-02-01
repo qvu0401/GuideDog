@@ -26,6 +26,9 @@ body{
   max-width:720px;
   margin:0 auto;
   padding:22px 18px 28px;
+  min-height: 100vh;
+  display:flex;
+  flex-direction:column;
 }
 
 .hero{
@@ -36,18 +39,6 @@ body{
   display:flex;
   align-items:center;
   gap:14px;
-}
-
-.mark{
-  width:44px;
-  height:44px;
-  display:grid;
-  place-items:center;
-  border-radius:14px;
-  border:1px solid var(--border);
-  background: rgba(255,255,255,.06);
-  box-shadow: 0 10px 26px rgba(0,0,0,.35);
-  font-size:22px;
 }
 
 .title{
@@ -70,6 +61,13 @@ body{
   padding:14px;
   box-shadow: var(--shadow);
   backdrop-filter: blur(10px);
+
+  /* Fill remaining screen space and center content */
+  flex: 1;
+  display:flex;
+  flex-direction:column;
+  justify-content:center;
+  gap:14px;
 }
 
 .preview{
@@ -100,19 +98,31 @@ video{
 
 .hidden{display:none}
 
+/* Big centered button ~ half screen height */
 .big{
   width:100%;
-  margin-top:14px;
-  padding:20px 16px;
-  font-size:22px;
-  font-weight:950;
-  border-radius:20px;
+  min-height: 30vh;
+  height: 35vh;
+  max-height: 40vh;
+
+  display:flex;
+  align-items:center;
+  justify-content:center;
+
+  padding:22px 16px;
+  font-size: clamp(26px, 4.6vw, 42px);
+  font-weight: 950;
+  border-radius: 24px;
+
   border:1px solid rgba(255,255,255,.16);
   color:var(--text);
-  background: linear-gradient(180deg, rgba(120,90,255,.55), rgba(120,90,255,.32));
+  background: linear-gradient(180deg, rgba(120,90,255,.60), rgba(120,90,255,.32));
   cursor:pointer;
   box-shadow: 0 16px 30px rgba(0,0,0,.35);
+  user-select:none;
+  -webkit-tap-highlight-color: transparent;
 }
+
 
 .big:active{
   transform: translateY(1px);
@@ -124,18 +134,19 @@ video{
 }
 
 .status{
-  margin-top:12px;
   padding:16px;
   border-radius:18px;
   border:1px solid var(--border);
   background: rgba(0,0,0,.18);
-  font-size:20px;
-  font-weight:950;
+  font-size:18px;
+  font-weight:900;
   line-height:1.25;
 }
 
-.note{
-  margin:10px 0 0;
-  font-size:12px;
-  color:var(--muted);
+@media (max-height: 700px){
+  .big{
+    min-height: 40vh;
+    height: 46vh;
+  }
+  .status{ font-size:16px; }
 }
