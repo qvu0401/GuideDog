@@ -7,31 +7,31 @@
     <link rel="stylesheet" href="styles.css" />
   </head>
   <body>
-    <main class="wrap" role="main">
-      <header class="header" role="banner">
-        <div class="appTitle">Person Direction Assistant</div>
-        <div class="appSub">Prototype for visually impaired users — tap once to hear where people are.</div>
+    <main class="shell" role="main">
+      <header class="hero" role="banner">
+        <div class="brand">
+          <div>
+            <h1 class="title">GuideDog</h1>
+            <p class="subtitle">Hear where people are.</p>
+          </div>
+        </div>
       </header>
 
-      <section class="card" aria-label="Camera">
-        <div class="cameraFrame" aria-hidden="true">
+      <section class="card" aria-label="Camera and capture">
+        <div class="preview" aria-hidden="true">
           <video id="video" autoplay playsinline muted></video>
+          <div class="glow" aria-hidden="true"></div>
           <canvas id="canvas" class="hidden"></canvas>
         </div>
 
-        <!-- Big single action -->
-        <button id="btnCapture" class="bigButton" aria-label="Take photo and describe people">
+        <button id="btnCapture" class="big" aria-label="Take photo and describe where people are">
           Take photo
         </button>
 
-        <!-- Screen-reader friendly status -->
         <div id="status" class="status" aria-live="assertive">
           Ready. Tap “Take photo”.
         </div>
 
-        <div class="smallNote" aria-hidden="true">
-          Tip: For best results, aim the camera straight ahead in good lighting.
-        </div>
       </section>
     </main>
 
